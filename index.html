@@ -77,6 +77,12 @@
   const C_AMBER     = hex('#b89a4a');
   const C_RIM       = hex('#3f4a2a');
   const C_WHITE     = [238, 234, 224];
+  const C_HEART_RED   = hex('#ff2e4d');
+  const C_HEART_PINK  = hex('#ff5c7a');
+  const C_HEART_WHITE = [255, 232, 238];
+  const C_HEART_DARK  = [120, 8, 30];
+  const HEART_FILL = 'QO0Zmwqpdb@#';
+  const HEART_EDGE = '-_()[]{}/\\';
   const C_PINK      = [205, 150, 140];
   const C_VEIN      = [190, 70, 60];
 
@@ -164,6 +170,22 @@
     if (a < 3 * s) return '\\';
     if (a < 5 * s) return '|';
     return '/';
+  }
+
+  // ---------- сердце: (x² + y² - 1)³ - x²·y³ ≤ 0 ----------
+  function heartF(x, y) { const a = x * x + y * y - 1; return a * a * a - x * x * y * y * y; }
+  // минимальный масштаб λ, при котором точка лежит внутри сердца, увеличенного в λ раз
+  function heartD(x, y) {
+    if (x * x + y * y > 6) return 9;
+    if (heartF(x, y) > 0) {                  // снаружи: грубая оценка для свечения
+      let lo = 1, hi = 2.5;
+      if (heartF(x / hi, y / hi) > 0) return 9;
+      for (let k = 0; k < 8; k++) { const m = (lo + hi) / 2; if (heartF(x / m, y / m) <= 0) hi = m; else lo = m; }
+      return hi;
+    }
+    let lo = 0, hi = 1;
+    for (let k = 0; k < 10; k++) { const m = (lo + hi) / 2; if (heartF(x / m, y / m) <= 0) hi = m; else lo = m; }
+    return hi;
   }
 
   // ---------- форма глаза ----------
@@ -415,10 +437,14 @@
     cellWorld = ch / (U * z);
     if (!eyeGone) rasterLashes(z);
 
-    // ---- планета ----
-    const pGrow = smooth(7.0, 9.4, t);
-    const PR = (0.62 + 0.04 * Math.sin(time * 0.7)) * pGrow;   // радиус в единицах U
-    const rot = time * 0.35;
+    // ---- сердце ----
+    const hAppear = smooth(6.9, 8.1, t);                       // проступает из звёзд
+    const hGrowP = smooth(8.0, 9.6, t);                        // вырастает до нормального размера
+    const bp = (time % 1.0);                                   // ~60 ударов в минуту
+    const beat = 0.12 * Math.exp(-Math.pow((bp - 0.08) / 0.055, 2))   // «тук»
+               + 0.07 * Math.exp(-Math.pow((bp - 0.3) / 0.06, 2));    // «тук», потом пауза
+    const HS = 0.5 * lerp(0.28, 1, hGrowP) * (1 + beat);      // размер сердца в единицах U
+    const beatGlow = beat / 0.12;
 
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, H);
@@ -445,33 +471,39 @@
           // ---- космос внутри зрачка ----
           oc = ' '; oR = oG = oB = 0;
           let done = false;
-          if (PR > 0.001) {
-            const d = Math.hypot(sx, sy) / PR;
-            if (d < 1) {
-              const nx = sx / PR, ny = sy / PR, nz = Math.sqrt(1 - d * d);
-              const lon = Math.atan2(nx, nz) + rot, lat = Math.asin(clamp(ny, -1, 1));
-              const tex = fbm(lon * 2.2 + 10, lat * 3.2);
-              const band = 0.5 + 0.5 * Math.sin(lat * 7 + tex * 4);
-              const light = Math.pow(nz, 0.7) * (0.85 + 0.15 * (-nx * 0.4 - ny * 0.5 + nz * 0.77));
-              let b = clamp(light * (0.55 + 0.35 * tex + 0.2 * band) + 0.04, 0, 1);
-              b *= smooth(0, 0.6, pGrow) ;
-              b = clamp(b + (cellSeed[i] - 0.5) * 0.06, 0, 1);
-              const cDark = [70, 6, 6], cMid = [215, 40, 28], cHot = [255, 150, 95];
-              const col = b < 0.6 ? mix3(cDark, cMid, b / 0.6) : mix3(cMid, cHot, (b - 0.6) / 0.4);
-              const m = 0.65 + 0.6 * b;
-              oc = b < 0.04 ? '.' : pickChar(levelOf(b), i, time * 0.6, 0);
+          if (hAppear > 0.001) {
+            // нормированный «радиус» внутри сердца: d < 1 — внутри
+            const hx = sx / HS, hy = -sy / HS + 0.12;
+            const d = heartD(hx, hy);
+            // проявление: клетки зажигаются случайно, будто из звёзд
+            const appear = cellSeed[i] < hAppear * 1.15 - 0.1 * d;
+            if (d < 1 && appear) {
+              const core = 1 - d;
+              let b = clamp(0.35 + 0.75 * Math.pow(core, 0.9) + 0.25 * beatGlow * core, 0, 1);
+              // мягкий блик на левой доле
+              const hl = Math.hypot(hx + 0.45, hy - 0.55);
+              b = clamp(b + 0.25 * smooth(0.45, 0.0, hl), 0, 1);
+              b = clamp(b + (cellSeed[i] - 0.5) * 0.06 + 0.03 * Math.sin(time * 6 + cellSeed[i] * 30), 0, 1);
+              let col;
+              if (d < 0.3) col = mix3(C_HEART_WHITE, C_HEART_PINK, smooth(0.05, 0.3, d));
+              else if (d < 0.7) col = mix3(C_HEART_PINK, C_HEART_RED, smooth(0.3, 0.7, d));
+              else col = mix3(C_HEART_RED, C_HEART_DARK, smooth(0.7, 1.0, d));
+              const edgeT = smooth(0.8, 1.0, d);                   // к краю темнее и «прозрачнее»
+              if (d < 0.82) oc = HEART_FILL[Math.floor(hash2(i, Math.floor(time * (3 + cellSeed[i] * 4) + cellSeed[i] * 9)) * HEART_FILL.length)];
+              else if (hash2(i, Math.floor(time * 4 + cellSeed[i] * 7)) < 0.75 - 0.35 * edgeT) oc = HEART_EDGE[Math.floor(hash2(i, Math.floor(time * 3) + 77) * HEART_EDGE.length)];
+              else oc = ' ';
+              const m = (0.7 + 0.5 * b) * (1 - 0.45 * edgeT) * hAppear;
               oR = col[0] * m; oG = col[1] * m; oB = col[2] * m;
-              done = true;
-            } else if (d < 1.45) {
-              const g = Math.pow(1 - (d - 1) / 0.45, 2) * smooth(0.2, 1, pGrow);
-              const pulse = 0.85 + 0.15 * Math.sin(time * 2 + d * 8);
-              const gb = g * pulse;
+              if (oc !== ' ') done = true;
+              else if (starB[i] * starVis < 0.05) continue;
+            } else if (d >= 1 && d < 1.55) {
+              const g = Math.pow(1 - (d - 1) / 0.55, 2) * hAppear * (0.75 + 0.35 * beatGlow);
               const sb = starB[i] * starVis;
-              if (gb > 0.12 && gb * 0.9 > sb) {
-                oc = gb > 0.5 ? pickChar(1, i, time, 3) : (hash2(i, Math.floor(time * 6)) > 0.5 ? '.' : ':');
-                if (gb > 0.75) oc = pickChar(0, i, time, 5);
-                oR = 255 * gb; oG = 45 * gb; oB = 30 * gb;
-                done = true;
+              if (g > 0.1 && g * 0.9 > sb && appear) {
+                oc = hash2(i, Math.floor(time * 5 + cellSeed[i] * 5)) < 0.45 + 0.4 * g ? (g > 0.45 ? ':' : '.') : ' ';
+                if (oc === ' ') { done = false; } else {
+                oR = 255 * g; oG = 46 * g; oB = 77 * g;
+                done = true; }
               }
             }
           }
