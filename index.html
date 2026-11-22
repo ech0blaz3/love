@@ -67,8 +67,11 @@
   }
 
   // ---------- палитра ----------
-  const C_SKIN_DULL = hex('#6e2716');
-  const C_SKIN_WARM = hex('#d9772e');
+  const C_SKIN_DULL = hex('#c87850');
+  const C_SKIN_WARM = hex('#e0a080');
+  const C_CARUNCLE  = hex('#e8a0a0');
+  const C_CREASE    = hex('#9a5c44');
+  const C_BROW      = hex('#8a5a3a');
   const C_IRIS_A    = hex('#7a8a4a');
   const C_IRIS_B    = hex('#8f9c5a');
   const C_AMBER     = hex('#b89a4a');
@@ -163,20 +166,39 @@
     return '/';
   }
 
+  // ---------- форма глаза ----------
+  const EYE_W = 0.95;
+  const TILT = 0.07;                 // внешний уголок (справа) приподнят
+  function lidTopOpen(x) {
+    const ax = Math.abs(x) / EYE_W, k = Math.max(0, 1 - ax * ax);
+    return -0.30 * Math.pow(k, x < 0 ? 0.55 : 0.72);   // внутренний уголок мягче, внешний острее
+  }
+  function lidBot(x) {
+    const ax = Math.abs(x) / EYE_W, k = Math.max(0, 1 - ax * ax);
+    return 0.27 * Math.pow(k, x < 0 ? 0.7 : 0.95);
+  }
+  function lidTop(x, c) { return lerp(lidTopOpen(x), lidBot(x) * 0.55, c); }
+  function creaseY(x) {
+    const ax = Math.abs(x - 0.05) / 1.02, k = Math.max(0, 1 - ax * ax);
+    return -(0.30 * Math.pow(k, 0.6) + 0.15 * k);
+  }
+  function browY(x) { const u = (x - 0.3) / 0.95; return -0.66 - 0.15 * (1 - u * u); }
+
+  let cellWorld = 0.01;     // высота клетки в мировых единицах (зависит от зума)
+  let blinkC = 0;           // 0 — открыт, 1 — закрыт
+
   function shadeEye(i, wx, wy, t, rp) {
     const ri = 0.34;
-    const ax = Math.abs(wx) / 0.92;
-    const k = Math.max(0, 1 - ax * ax);
-    const upper = 0.42 * Math.pow(k, 0.72);
-    const lower = 0.33 * Math.pow(k, 0.8);
-    const lid = wy < 0 ? upper : lower;
+    const ey = wy + TILT * wx;               // координата в системе глаза
+    const top = lidTop(wx, blinkC), bot = lidBot(wx);
+    const inEye = Math.abs(wx) < EYE_W && ey > top && ey < bot;
     const r = Math.hypot(wx, wy);
-    const edge = lid - Math.abs(wy);          // >0 внутри глаза
 
-    if (edge > 0 && r < rp) return 2;         // зрачок → космос
+    if (inEye && r < rp) return 2;           // зрачок → космос
 
     let b, col, ch2 = null;
-    if (edge > 0) {
+    if (inEye) {
+      const eT = ey - top, eB = bot - ey;
       if (r < ri) {
         // ---- радужка ----
         const rn = (r - rp) / (ri - rp);
@@ -189,55 +211,143 @@
         const rim = smooth(0.78, 0.97, rn);
         col = mix3(col, C_RIM, rim);
         b = 0.5 + 0.42 * f;
-        b += 0.15 * Math.exp(-Math.pow((rn - 0.3) / 0.06, 2));   // воротничок
+        b += 0.15 * Math.exp(-Math.pow((rn - 0.3) / 0.06, 2));
         b *= 1 - 0.45 * rim;
-        b *= 1 - 0.55 * smooth(0.06, 0.0, edge) ;                 // тень от века
-        b *= 1 - 0.25 * smooth(0.0, -0.3, wy) * smooth(0.12, 0.0, edge + 0.05);
+        b *= 1 - 0.5 * smooth(0.09, 0.0, eT);                     // тень от верхнего века
         if (f > 0.7 && rn > 0.05 && rn < 0.9 && hash2(i, Math.floor(t * 2 + cellSeed[i] * 9)) > 0.25) ch2 = dirChar(th);
-        // блики
-        const hl = Math.hypot(wx + 0.11, wy + 0.12);
-        const hl2 = Math.hypot(wx - 0.13, wy - 0.1);
-        const spec = Math.max(smooth(0.06, 0.02, hl), 0.55 * smooth(0.03, 0.01, hl2));
-        if (spec > 0) { col = mix3(col, [250, 248, 230], spec); b = lerp(b, 1, spec); if (spec > 0.5) ch2 = null; }
-        // мерцание бликов по волокнам
         b += 0.06 * Math.sin(t * 3 + th * 11 + rn * 6) * f;
+        // блики-отражения сверху слева
+        const h1 = Math.hypot(wx + 0.115, (wy + 0.10) * 0.9);
+        const h2 = Math.hypot(wx + 0.2, wy + 0.02);
+        const spec = Math.max(smooth(0.05, 0.02, h1), 0.9 * smooth(0.028, 0.008, h2));
+        if (spec > 0) { col = mix3(col, [255, 255, 250], spec); b = lerp(b, 1, spec); }
+        if (spec > 0.45) { ch2 = '*'; col = [255, 255, 250]; b = 1; }
       } else {
         // ---- белок ----
-        const sh = smooth(0.08, 0.0, edge);            // тень у век
+        const sh = Math.max(smooth(0.08, 0.0, eT), 0.6 * smooth(0.04, 0.0, eB));
         const corner = smooth(0.45, 0.92, Math.abs(wx));
-        col = mix3(C_WHITE, C_PINK, Math.max(corner * 0.85, sh * 0.6));
-        const vein = smooth(0.82, 0.9, vnoise(wx * 22 + 3, wy * 22)) * smooth(0.36, 0.7, Math.abs(wx));
-        col = mix3(col, C_VEIN, vein * 0.7);
-        b = 0.97 - 0.35 * corner - 0.5 * sh - 0.1 * smooth(0.0, -0.25, wy);
-        b -= 0.18 * smooth(ri + 0.04, ri, r);          // лёгкая тень вокруг радужки
+        col = mix3(C_WHITE, C_PINK, Math.max(corner * 0.7, sh * 0.5));
+        b = 0.97 - 0.3 * corner - 0.45 * sh;
+        b -= 0.15 * smooth(ri + 0.04, ri, r);
+        if (wx < -0.68) {                     // мягкий розовый внутренний уголок
+          const p = smooth(-0.68, -0.8, wx);
+          col = mix3(col, C_CARUNCLE, p);
+          b = lerp(b, 0.62, p);
+        }
       }
     } else {
-      // ---- кожа ----
-      const d = -edge;
-      const n = fbm(wx * 5 + 3, wy * 9 - 2);
-      const crease = Math.exp(-Math.pow((wy + upper + 0.13 * k + 0.04) / 0.025, 2)) * (wy < 0 ? 1 : 0);
-      const wrinkle = 0.5 + 0.5 * Math.sin(d * 55 + n * 6);
-      const g = clamp(0.25 + 0.55 * n + 0.25 * smooth(1.6, 0.2, Math.hypot(wx * 0.8, wy)) , 0, 1);
+      // ---- кожа (персиковая) ----
+      const n = fbm(wx * 3 + 3, wy * 5 - 2);
+      const g = clamp(0.35 + 0.45 * n + 0.2 * smooth(1.6, 0.3, Math.hypot(wx * 0.8, wy)) - 0.15 * smooth(-0.2, 0.9, wy), 0, 1);
       col = mix3(C_SKIN_DULL, C_SKIN_WARM, g);
-      b = 0.08 + 0.36 * n + 0.12 * wrinkle * smooth(0.35, 0.0, d);
-      b -= 0.35 * crease;
-      // линия ресниц
-      const lash = smooth(0.05, 0.0, d);
-      b *= 1 - 0.8 * lash;
-      col = mix3(col, [40, 14, 8], lash);
-      b += 0.12 * smooth(1.8, 0.4, Math.hypot(wx, wy * 1.6));
-      b = clamp(b, 0, 0.7);
+      b = 0.3 + 0.22 * n;
+      // мягкая тень века и розовинка у внутреннего уголка
+      const dTop = top - ey;
+      if (dTop > 0 && Math.abs(wx) < EYE_W + 0.05) b += 0.12 * smooth(0.25, 0.04, dTop) * smooth(0.0, 0.04, dTop);  // светлое веко → контраст с ресницами
+      col = mix3(col, C_CARUNCLE, 0.45 * smooth(0.25, 0.0, Math.hypot(wx + EYE_W, ey)));
+
+      const th = cellWorld * 0.6;
+      // складка века: тонкая линия ~ - _
+      const cx = Math.abs(wx - 0.05);
+      if (cx < 0.98 && blinkC < 0.6) {
+        const cy = creaseY(wx);
+        if (Math.abs(ey - cy) < th) {
+          const k = hash2(i, Math.floor(t * 2 + cellSeed[i] * 7));
+          ch2 = cx > 0.8 ? (wx > 0 ? '_' : '-') : (k < 0.45 ? '~' : k < 0.8 ? '-' : '_');
+          col = C_CREASE; b = 0.75 * (1 - smooth(0.75, 0.98, cx) * 0.5);
+        }
+      }
+      // бровь: мягкая дуга / ' `
+      if (wx > -0.92 && wx < 1.1) {
+        const by = browY(wx);
+        const u = (wx + 0.92) / 2.02;
+        const half = lerp(0.06, 0.018, u) + 0.012 * vnoise(wx * 18, 3);
+        if (Math.abs(wy - by) < Math.max(half, th)) {
+          const hair = hash2(i, Math.floor(t * 1.5 + cellSeed[i] * 5));
+          if (u < 0.4) ch2 = hair < 0.75 ? '/' : '\'';
+          else if (u < 0.7) ch2 = hair < 0.5 ? '`' : '\'';
+          else ch2 = hair < 0.6 ? '\'' : '`';
+          col = C_BROW;
+          b = 0.85 - 0.25 * u + 0.1 * (hair - 0.5);
+        }
+      }
     }
 
-    b = clamp(b + (cellSeed[i] - 0.5) * 0.08 + 0.03 * Math.sin(t * 7 + cellSeed[i] * 40), 0, 1);
+    b = clamp(b + (cellSeed[i] - 0.5) * 0.06 + 0.03 * Math.sin(t * 7 + cellSeed[i] * 40), 0, 1);
     oc = ch2 || (b < 0.05 ? ' ' : pickChar(levelOf(b), i, t, 0));
-    const m = 0.35 + 0.8 * b;
+    const m = (!inEye && !ch2) ? 0.55 + 0.7 * b : 0.35 + 0.8 * b;
     oR = col[0] * m; oG = col[1] * m; oB = col[2] * m;
     return 1;
   }
 
+  // ---------- ресницы ----------
+  const LASHES = [];
+  (function buildLashes() {
+    const N = 27;
+    for (let j = 0; j < N; j++) {
+      const s = j / (N - 1);
+      const x = lerp(-0.72, 0.93, Math.pow(s, 0.9)) + (hash2(j, 5) - 0.5) * 0.02;
+      const outer = smooth(-0.3, 0.93, x);
+      LASHES.push({
+        x,
+        tilt: lerp(-0.45, 1.15, smooth(-0.75, 0.95, x)) + (hash2(j, 7) - 0.5) * 0.15,
+        len: (0.08 + 0.13 * outer) * (0.85 + 0.3 * hash2(j, 9)),
+        cluster: Math.floor(j / 3), upper: true, grp: j % 3,
+      });
+    }
+    // пучки: кончики сходятся к среднему наклону группы
+    const groups = {};
+    for (const l of LASHES) (groups[l.cluster] = groups[l.cluster] || []).push(l.tilt);
+    for (const l of LASHES) { const g = groups[l.cluster]; l.ct = g.reduce((a, b) => a + b, 0) / g.length; }
+    // нижние: короткие и редкие
+    for (let j = 0; j < 9; j++) {
+      const x = lerp(-0.25, 0.85, j / 8) + (hash2(j, 11) - 0.5) * 0.05;
+      LASHES.push({ x, tilt: lerp(-0.2, 0.6, j / 8), ct: lerp(-0.2, 0.6, j / 8), len: 0.045 + 0.035 * hash2(j, 13) + 0.03 * (j / 8), upper: false });
+    }
+  })();
+  let lashMark = new Uint8Array(0), lashCh = [];
+
+  function rasterLashes(z) {
+    if (lashMark.length !== cols * rows) { lashMark = new Uint8Array(cols * rows); lashCh = new Array(cols * rows); }
+    lashMark.fill(0);
+    const scale = z * U;
+    const step = Math.min(cw, ch) * 0.45 / scale;
+    for (const l of LASHES) {
+      let wx = l.x, wy;
+      if (l.upper) wy = lidTop(wx, blinkC) - TILT * wx - 0.004;
+      else wy = lidBot(wx) - TILT * wx + 0.004;
+      const n = Math.max(2, Math.ceil(l.len / step));
+      let prevCell = -1;
+      for (let k = 0; k <= n; k++) {
+        const s = k / n;
+        // угол: наклон от вертикали, к кончику сходится к пучку и загибается вверх
+        const ang = lerp(l.tilt, l.ct, s * 0.8) * (1 - 0.55 * s * s);
+        let dx = Math.sin(ang), dy;
+        if (l.upper) dy = -Math.cos(ang) * (1 - 1.9 * blinkC);   // при моргании ресницы опускаются вместе с веком
+        else dy = Math.cos(ang) * 0.9;
+        if (k > 0) { wx += dx * l.len / n; wy += dy * l.len / n; }
+        const px = W / 2 + wx * scale, py = H / 2 + wy * scale;
+        const cx = Math.floor(px / cw), cy = Math.floor(py / ch);
+        if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) continue;
+        const idx = cy * cols + cx;
+        if (idx === prevCell) continue;
+        prevCell = idx;
+        let c;
+        if (k >= n - 1 && l.upper) c = '\'';
+        else {
+          const a = Math.atan2(-dy, dx) * 180 / Math.PI;          // вверх = 90°
+          const aa = a < 0 ? a + 180 : a;
+          c = aa > 72 && aa < 108 ? '|' : aa < 90 ? '/' : '\\';
+          if (!l.upper && k === n) c = '\'';
+        }
+        lashMark[idx] = 1; lashCh[idx] = c;
+      }
+    }
+  }
+
   // ---------- кадр ----------
-  let time = parseFloat(new URLSearchParams(location.search).get('t')) || 0, last = performance.now(), paused = false;
+  const qs = new URLSearchParams(location.search);
+  let time = parseFloat(qs.get('t')) || 0, last = performance.now(), paused = qs.has('p');
 
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
@@ -248,7 +358,7 @@
     const z = zoomAt(t);
     const zPrev = zoomAt(Math.max(0, t - 0.05));
     const zoomVel = Math.log(z / zPrev) / 0.05;          // скорость наезда
-    const rp = 0.115 + 0.025 * smooth(1.5, 6, t);       // зрачок слегка расширяется
+    const rp = 0.115 + 0.025 * smooth(1.5, 6, t) + 0.01 * Math.sin(time * 1.6) + 0.005 * Math.sin(time * 0.63);  // зрачок «дышит»
     const fade = smooth(0, 0.8, t) * (1 - smooth(11.0, 11.95, t));
     const starVis = smooth(2.2, 4.0, t);
     const eyeGone = z * rp * U > Math.hypot(W, H) * 0.6;
@@ -292,6 +402,19 @@
       }
     }
 
+    // ---- моргание ----
+    {
+      // моргания в 0.9 с и 3.4 с цикла — пока глаз виден целиком
+      let bl = 0;
+      for (const t0 of [0.9, 3.4]) {
+        const ph = t - t0;
+        if (ph >= 0 && ph < 0.34) bl = ph < 0.11 ? smooth(0, 0.11, ph) : 1 - smooth(0.11, 0.34, ph);
+      }
+      blinkC = bl * (1 - smooth(2.2, 3.0, z));
+    }
+    cellWorld = ch / (U * z);
+    if (!eyeGone) rasterLashes(z);
+
     // ---- планета ----
     const pGrow = smooth(7.0, 9.4, t);
     const PR = (0.62 + 0.04 * Math.sin(time * 0.7)) * pGrow;   // радиус в единицах U
@@ -310,7 +433,13 @@
         const sx = (px - W / 2) / U;
 
         let kind = 2;
-        if (!eyeGone) kind = shadeEye(i, sx / z, sy / z, time, rp);
+        if (!eyeGone) {
+          kind = shadeEye(i, sx / z, sy / z, time, rp);
+          if (lashMark[i]) {
+            // ресница: тёмный штрих, вырезанный из светлой кожи
+            oc = lashCh[i]; oR = 92; oG = 66; oB = 66; kind = 3;
+          }
+        }
 
         if (kind === 2) {
           // ---- космос внутри зрачка ----
