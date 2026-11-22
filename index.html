@@ -207,14 +207,27 @@
   function browY(x) { const u = (x - 0.3) / 0.95; return -0.66 - 0.15 * (1 - u * u); }
 
   let cellWorld = 0.01;     // высота клетки в мировых единицах (зависит от зума)
-  let blinkC = 0;           // 0 — открыт, 1 — закрыт
+  const blinkC = 0;         // моргание убрано: веко всегда открыто
+  let gazeX = 0, gazeY = 0; // куда смотрит глаз (смещение радужки)
+  // взгляд в начале цикла: влево, вправо, чуть вверх, обратно в центр перед наездом
+  const GAZE = [[0.45, -0.28, 0.02], [1.1, 0.3, -0.03], [1.7, 0.1, -0.07], [2.3, 0, 0]];
+  function updateGaze(t) {
+    let x = 0, y = 0;
+    for (const [t0, gx, gy] of GAZE) {
+      if (t < t0) break;
+      const k = smooth(t0, t0 + 0.2, t);         // быстрый, но плавный перевод взгляда
+      x = lerp(x, gx, k); y = lerp(y, gy, k);
+    }
+    gazeX = x; gazeY = y;
+  }
 
   function shadeEye(i, wx, wy, t, rp) {
     const ri = 0.34;
     const ey = wy + TILT * wx;               // координата в системе глаза
     const top = lidTop(wx, blinkC), bot = lidBot(wx);
     const inEye = Math.abs(wx) < EYE_W && ey > top && ey < bot;
-    const r = Math.hypot(wx, wy);
+    const ix = wx - gazeX, iy = wy - gazeY;  // координаты относительно смещённой радужки
+    const r = Math.hypot(ix, iy);
 
     if (inEye && r < rp) return 2;           // зрачок → космос
 
@@ -224,7 +237,7 @@
       if (r < ri) {
         // ---- радужка ----
         const rn = (r - rp) / (ri - rp);
-        const th = Math.atan2(wy, wx);
+        const th = Math.atan2(iy, ix);
         const fib = 0.5 + 0.5 * Math.sin(th * 70 + 5 * vnoise(th * 4 + 7, rn * 4));
         const fib2 = vnoise(Math.cos(th) * 14 + 20 + rn * 3, Math.sin(th) * 14 + rn * 3);
         const f = clamp(0.65 * fib + 0.55 * fib2 - 0.1, 0, 1);
@@ -239,8 +252,8 @@
         if (f > 0.7 && rn > 0.05 && rn < 0.9 && hash2(i, Math.floor(t * 2 + cellSeed[i] * 9)) > 0.25) ch2 = dirChar(th);
         b += 0.06 * Math.sin(t * 3 + th * 11 + rn * 6) * f;
         // блики-отражения сверху слева
-        const h1 = Math.hypot(wx + 0.115, (wy + 0.10) * 0.9);
-        const h2 = Math.hypot(wx + 0.2, wy + 0.02);
+        const h1 = Math.hypot(ix + 0.115, (iy + 0.10) * 0.9);
+        const h2 = Math.hypot(ix + 0.2, iy + 0.02);
         const spec = Math.max(smooth(0.05, 0.02, h1), 0.9 * smooth(0.028, 0.008, h2));
         if (spec > 0) { col = mix3(col, [255, 255, 250], spec); b = lerp(b, 1, spec); }
         if (spec > 0.45) { ch2 = '*'; col = [255, 255, 250]; b = 1; }
@@ -424,16 +437,7 @@
       }
     }
 
-    // ---- моргание ----
-    {
-      // моргания в 0.9 с и 3.4 с цикла — пока глаз виден целиком
-      let bl = 0;
-      for (const t0 of [0.9, 3.4]) {
-        const ph = t - t0;
-        if (ph >= 0 && ph < 0.34) bl = ph < 0.11 ? smooth(0, 0.11, ph) : 1 - smooth(0.11, 0.34, ph);
-      }
-      blinkC = bl * (1 - smooth(2.2, 3.0, z));
-    }
+    updateGaze(t);
     cellWorld = ch / (U * z);
     if (!eyeGone) rasterLashes(z);
 
